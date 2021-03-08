@@ -1,0 +1,528 @@
+<html>
+
+<head>
+<style>
+   body, html {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      background-color: #020202;
+   }
+
+   canvas {
+      height: 512px;
+      width: 512px;
+      left: calc(50% - 256px);
+      top: calc(50% - 256px);
+      display: block;
+      position: absolute;
+
+      box-sizing:border-box;
+
+      image-rendering: -moz-crisp-edges;
+      image-rendering: -webkit-crisp-edges;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+   }
+
+</style>
+
+
+</head>
+
+<body>
+
+   <canvas id="canvas" width="64" height="64" style="border:8px solid #00000f;background-color:black;"></canvas>
+
+   <p id="dframerate" style="position: absolute; right:10px;bottom:10px; color:red; ">FPS</p>
+
+</body>
+
+
+<script src="Maffs.js"></script>
+<script src="Randos.js"></script>
+
+<script>
+   var canvas = document.getElementById('canvas');
+   var ctx = canvas.getContext('2d');
+
+   const pixels = new Uint8ClampedArray(new ArrayBuffer(64 * 64 * 4));
+   const lastpixels = new Uint8ClampedArray(new ArrayBuffer(64 * 64 * 4));
+
+   function clearpix(){
+      for(var i=0;i<64*64;i++){
+         var ti = i*4;
+         pixels[ti]=pixels[ti+1]=pixels[ti+2]=0;
+         pixels[ti+3] = 255;
+         //console.log(i);
+      }
+   }
+
+   function mulpix(m){
+      for(var i=0;i<64*64;i++){
+         var ti = i*4;
+         pixels[ti]=(~~(pixels[ti]*m));
+         pixels[ti+1]=(~~(pixels[ti+1]*m));
+         pixels[ti+2]=(~~(pixels[ti+2]*m));
+         pixels[ti+3] = 255;
+         //console.log(i);
+      }
+   }
+
+   function bisamplepix(a,x,y){
+
+      if(x<1 || x>62 || y<1 || y>62){
+         return([0,0,0]);
+      }
+
+      var iy = (~~y);
+      y = y-iy;
+
+      var ix = (~~x);
+      x = x-ix;
+
+      var ti = (iy*64 + ix)*4;
+
+
+      var ret = [0,0,0];
+      for(var i=0;i<3;i++){
+         ret[i] = a[ti+i]*(1-x) + a[ti+i+4]*x;
+         ret[i] = ret[i]*(1-y) + (a[ti+i+256]*(1-x) + a[ti+i+4+256]*x)*y;
+      }
+      return(ret);
+   }
+
+   function motpix(m,v,b){
+      lastpixels.set(pixels);
+      for(var mi=0;mi<5;mi++){
+
+         for(var y=0;y<64;y++){
+            var ty = y*64;
+            var sy = ((y-32)*v)+32;
+            for(var x=0;x<64;x++){
+               var sx = ((x-(32+b))*v)+(32+b);
+               var samp = bisamplepix(lastpixels,sx,sy);
+               var ti = (ty+x)*4;
+               pixels[ti]=(~~(samp[0]*m));
+               pixels[ti+1]=(~~(samp[1]*m));
+               pixels[ti+2]=(~~(samp[2]*m));
+               pixels[ti+3] = 255;
+               //console.log(i);
+            }
+         }
+      }
+   }
+
+   function putpix(c,x,y){
+      if(x<0 || x>63 || y<0 || y>63){
+         return;
+      }
+      x = (~~x);
+      y = (~~y);
+      var pi = (y*64 + x)*4;
+      for(var ci=0;ci<4;ci++){
+         pixels[pi+ci] += (~~(c[ci]>0?c[ci]:0));
+      }
+   }
+
+
+   function line(c, x0, y0, x1, y1) {
+      x0 = (~~x0);
+      y0 = (~~y0);
+      x1 = (~~x1);
+      y1 = (~~y1);
+      var dx = Math.abs(x1 - x0);
+      var dy = Math.abs(y1 - y0);
+      var sx = (x0 < x1) ? 1 : -1;
+      var sy = (y0 < y1) ? 1 : -1;
+      var err = dx - dy;
+
+      while(true) {
+         if ((x0 === x1) && (y0 === y1)) break;
+
+         putpix(c,x0,y0);
+
+         var e2 = 2*err;
+         if (e2 > -dy) { err -= dy; x0  += sx;}
+         if (e2 < dx) { err += dx; y0  += sy;}
+      }
+   }
+
+   function line3(c1,c2,p1,p2){
+      var s1 = 1-clamp(p1[2]/500,0,1);
+      p1[0] = p1[0]*s1 + 32;
+      p1[1] = p1[1]*s1 + 32;
+
+      var s2 = 1-clamp(p2[2]/500,0,1);
+      p2[0] = p2[0]*s2 + 32;
+      p2[1] = p2[1]*s2 + 32;
+
+      var steps = (~~(Math.abs(p1[0]-p2[0])/4)) || 1;
+
+      var step = [(p2[0]-p1[0])/steps,(p2[1]-p1[1])/steps,((1-s2)-(1-s1))/steps]
+
+      var tc1 = c1.slice(0);
+      var tc2 = c2.slice(0);
+
+      c1 = mix_vec(tc1,tc2,(1-s1));
+      c2 = mix_vec(tc1,tc2,(1-s2));
+
+      var cstep = [(c2[0]-c1[0])/steps,(c2[1]-c1[1])/steps,(c2[2]-c1[2])/steps,(c2[3]-c1[3])/steps]
+
+      var cur = [p1[0],p1[1],(1-s1)];
+
+      var curc = c1.slice(0);
+
+      for(var i=0;i<steps;i++){
+         var tbendy = (cur[2]+step[2]);
+            tbendy*=tbendy;
+         line(curc,cur[0]+bend*(cur[2]*cur[2]), cur[1]+ybend*(cur[2]*cur[2]), cur[0]+step[0]+bend*tbendy, cur[1]+step[1]+ybend*tbendy);
+         cur[0]+=step[0];
+         cur[1]+=step[1];
+         cur[2]+=step[2];
+         curc[0]+=cstep[0];
+         curc[1]+=cstep[1];
+         curc[2]+=cstep[2];
+         curc[3]+=cstep[3];
+      }
+
+   }
+
+   function point3(c1,c2,p1){
+      var s1 = 1-clamp(p1[2]/500,0,1);
+      p1[0] = p1[0]*s1 + 32;
+      p1[1] = p1[1]*s1 + 32;
+
+      var s1i = 1-s1;
+
+      var c = mix_vec(c1,c2,s1i);
+
+      var tbendy = (s1i*s1i);
+
+      putpix(c,p1[0]+bend*tbendy,p1[1]+ybend*tbendy);
+
+   }
+
+
+   function model3(c1,c2,l,o){
+      for(var i=0;i<l.length-1;i++){
+         line3(c1,c2,
+         [l[i][0]+o[0],l[i][1]+o[1],l[i][2]+o[2]],
+         [l[i+1][0]+o[0],l[i+1][1]+o[1],l[i+1][2]+o[2]]);
+      }
+   }
+
+
+   function model3c(c,l,o){
+      for(var i=0;i<l.length;i++){
+         model3(c[i][0],c[i][1],l[i],o)
+      }
+   }
+
+   var bend = 0;
+
+
+   var dframerate = document.getElementById('dframerate');
+
+   var framerate = .5;
+   var lasttime = performance.now();
+   var animtime = 0;
+
+///OUTBLASTER
+
+   function render() {
+
+      requestAnimationFrame(render);
+
+      var thistime = performance.now();
+      framerate = ((thistime - lasttime)/1000);//framerate*.9+ //*.1
+
+
+      //Cap the framerate to remove jankiness
+      if(framerate < 1/30){
+         return;
+      }
+
+      framerate = Math.min(framerate,.1);
+
+      lasttime = thistime;
+
+      animtime += framerate;
+
+      bend = 8*Math.sin(animtime) + 16*Math.sin(animtime*.36124);
+      ybend = 4*Math.sin(animtime*.9432694 + 2) + 8*Math.sin(animtime*.42163);
+
+      var dfr = 1.0/framerate;
+      dframerate.innerHTML = "" + (bend.toFixed(2)) + " " + (dfr.toFixed(2));
+
+
+      //clearpix();
+      //mulpix(.2);
+      motpix(.4,.95,bend);
+/*
+      for(var i=0;i<10;i++){
+         putpix([getrand()*255,0,getrand()*255,255],24+getrand()*16,24+getrand()*16);
+      }
+*/
+
+      //putpix([255,0,0,255],20,45);
+
+      line3([0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255], [-80, 32, 0], [-80, 32, 500]);
+      line3([0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255], [80, 32, 0], [80, 32, 500]);
+
+
+      /*model3([0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255],
+         [
+            [0,-3,0],
+            [-5,-3,0],
+            [-6,0,0],
+            [-8,0,0],
+            [-8,-3,0],
+            [-12,-3,0],
+            [-12,-8,0],
+            [12,-8,0],
+            [12,-3,0],
+            [8,-3,0],
+            [8,0,0],
+            [6,0,0],
+            [5,-3,0],
+            [0,-3,0],
+         ],
+         [20,32,100 + Math.sin(animtime)*100]
+      );*/
+
+/*
+      model3([0,0,0,255],[0,8+getrand()*32,8+getrand()*32,255],
+         [
+            [-550,-190,0],
+            [-400,-100,0],
+            [-350,-120,0],
+            [-300,-30,0],
+            [-250,-60,0],
+            [-200,-140,0],
+            [-150,-80,0],
+            [-100,-20,0],
+            [-50,-150,0],
+            [-0,-120,0],
+            [50,-100,0],
+            [100,-70,0],
+            [150,-40,0],
+            [200,-90,0],
+            [250,-120,0],
+            [300,-190,0],
+            [350,-140,0],
+            [400,-100,0],
+            [550,-190,0]
+         ],
+         [0,-30,450]
+      );
+*/
+      model3([0,0,0,255],[0,50+getrand()*50,100+getrand()*100,255],
+         [
+            [550,-190,0],
+            [400,-100,0],
+            [350,-120,0],
+            [300,-30,0],
+            [250,-60,0],
+            [200,-140,0],
+            [150,-80,0],
+            [100,-20,0],
+            [50,-150,0],
+            [0,-120,0],
+            [-50,-100,0],
+            [-100,-70,0],
+            [-150,-40,0],
+            [-200,-90,0],
+            [-250,-120,0],
+            [-300,-190,0],
+            [-350,-140,0],
+            [-400,-100,0],
+            [-550,-190,0]
+         ],
+         [0,-60,430]
+      );
+
+
+      model3c(
+         [
+            [[0,0,0,255],[0,50+getrand()*100,150+getrand()*100,255]],
+            [[0,0,0,255],[0,50+getrand()*100,150+getrand()*100,255]],
+            [[0,0,0,255],[0,50+getrand()*100,150+getrand()*100,255]],
+            //[[0,0,0,255],[250+getrand()*100,100+getrand()*150,20+getrand()*20,255]]
+         ],
+         [
+            [
+               [100,0,0],
+               [70,70,0],
+               [0,100,0],
+               [-70,70,0],
+               [-100,0,0],
+               [-70,-70,0],
+               [0,-100,0],
+               [70,-70,0],
+               [100,0,0],
+            ],
+
+            [
+               [75,0,0],
+               [52,52,0],
+               [0,75,0],
+               [-52,52,0],
+               [-75,0,0],
+               [-52,-52,0],
+               [0,-75,0],
+               [52,-52,0],
+               [75,0,0],
+            ],
+            [
+               [37,0,0],
+               [26,26,0],
+               [0,37,0],
+               [-26,26,0],
+               [-37,0,0],
+               [-26,-26,0],
+               [0,-37,0],
+               [26,-26,0],
+               [37,0,0],
+            ],
+         ],
+         [200,-360,460]
+      );
+
+      for(var i=0;i<5;i++){
+
+         var td = 0;
+
+         td = 1500 - ((getrand_i(i)*1500 + (animtime*200))%1500);
+         model3c(
+            [
+               [[0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255]],
+               [[400,0,0,255],[-255,-255,0,255]],
+               [[400,0,0,255],[-255,-255,0,255]]
+            ],
+            [
+
+               [
+                  [0,-3,0],
+                  [-5,-3,0],
+                  [-6,0,0],
+                  [-8,0,0],
+                  [-8,-3,0],
+                  [-11,-3,0],
+                  [-11,-9,0],
+
+                  [-9,-11,0],
+                  [-8,-14,0],
+                  [8,-14,0],
+                  [9,-11,0],
+
+                  [11,-9,0],
+                  [11,-3,0],
+                  [8,-3,0],
+                  [8,0,0],
+                  [6,0,0],
+                  [5,-3,0],
+                  [0,-3,0],
+               ],
+               [
+                  [-10,-4,0],
+                  [-10,-7,0]
+               ],
+               [
+                  [10,-4,0],
+                  [10,-7,0]
+               ]
+            ],
+            [-70+getrand_i(i)*140,32,100 + Math.sin(animtime)*50 - 50 + td]
+         );
+
+
+         td = 1500 - ((getrand_i(i+123)*1500 + (animtime*200))%1500);
+         model3c(
+            [
+               [[0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255]],
+               [[0,64+getrand()*64,64+getrand()*64,255],[-255,-255,0,255]],
+               [[400,0,0,255],[-255,-255,0,255]],
+               [[400,0,0,255],[-255,-255,0,255]]
+            ],
+            [
+
+
+               [
+                  [0,-3,40],
+                  [-5,-3,40],
+                  [-6,0,40],
+                  [-8,0,40],
+                  [-8,-3,40],
+                  [-9,-3,40],
+                  [-12,-6,40],
+                  [-12,-21,40],
+                  [-10,-23,40],
+                  [10,-23,40],
+                  [12,-21,40],
+                  [12,-6,40],
+                  [9,-3,40],
+                  [8,-3,40],
+                  [8,0,40],
+                  [6,0,40],
+                  [5,-3,40],
+                  [0,-3,40],
+
+               ],
+               [
+                  [0,-3,0],
+                  [-5,-3,0],
+                  [-6,0,0],
+                  [-8,0,0],
+                  [-8,-3,0],
+                  [-12,-3,0],
+                  [-12,-8,0],
+                  [12,-8,0],
+                  [12,-3,0],
+                  [8,-3,0],
+                  [8,0,0],
+                  [6,0,0],
+                  [5,-3,0],
+                  [0,-3,0],
+               ],
+               [
+                  [-10,-4,0],
+                  [-10,-7,0]
+               ],
+               [
+                  [10,-4,0],
+                  [10,-7,0]
+               ]
+            ],
+            [-70+getrand_i(i+123)*140,32,100 + Math.sin(animtime)*50 - 100 + td]
+         );
+
+      }
+
+      for(var i=0;i<2;i++){
+         var td = 500-(((i*250)+(animtime*1600))%500);
+         line3([0,355,355,255],[-255,-255,0,255],
+         [0, 32, td],
+         [0, 32, td+70]);
+      }
+
+      for(var i=0;i<10;i++){
+         point3(
+               [0,255,255,255],
+               [-255,-255,0,255],
+               [-80+getrand_i(i)*160,32,500-(((getrand_i(i+542)*500+(animtime*800)))%500)]);
+      }
+
+      //line([0,255,0,255], 10, 5, 40, 50);
+      //clearpix();
+
+      ctx.putImageData(new ImageData(pixels, 64, 64), 0, 0);
+
+   }
+
+   render();
+
+</script>
+
+</html>
